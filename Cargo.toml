@@ -1,0 +1,16 @@
+[package]
+name = "superdb"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Super Binary (BSUP) encoding of super-structured data for Rust, with serde support"
+license-file = "LICENSE.md"
+repository = "https://github.com/superdb/super-rs"
+keywords = ["superdb", "bsup", "serde", "serialization"]
+categories = ["encoding"]
+
+[dependencies]
+serde = "1.0"
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }

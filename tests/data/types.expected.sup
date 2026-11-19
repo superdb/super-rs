@@ -1,0 +1,16 @@
+{i8:-1::int8,i16:-300::int16,i32:70000::int32,i64:-9223372036854775808,u8:255::uint8,u16:65535::uint16,u32:4294967295::uint32,u64:18446744073709551615::uint64}
+{d:1h2m3s,ts:2024-03-01T12:34:56.789Z,f16:1.5::float16,f32:-2.25::float32,f64:3.141592653589793,b:true,by:0x00ff10,s:"héllo\n\"world\""}
+{ip4:10.0.0.1,ip6:fe80::1,n4:10.1.0.0/16,n6:2001:db8::/32,u:f81d4fae-7dec-11d0-a765-00a0c91e6bf6,t:<{a:int64,b:[string]}>,nul:null}
+{rec:{a:{b:{c:1}}},arr:[1,2,3],empty:[]::[int64],set:set[1,2,3],m:map{"a":1,"b":2}}
+type Point={x:int64,y:int64}
+type Color=enum(red,green,blue)
+{un:1::(int64|string),un2:"x"::(int64|string),en:"b"::enum(a,b,c),er:error("oops"),pt:{x:1,y:2}::Point,c:"green"::Color}
+{opt?:1,opt2?:none::string,arrun:[1,"two",3.,null]}
+[1,"a",{x:[]}]
+"just a string"
+42
+null
+error({message:"bad",on:1})
+{pt:{x:3,y:4}::Point,pts:[{x:5,y:6}::Point]}
+1
+{a:1}
