@@ -2,7 +2,9 @@
 //!
 //! The [`Serializer`] here infers the type of each value from the value
 //! itself (see [`crate::to_value_untyped`]): a struct is an anonymous
-//! record, `None` is null, a sequence whose elements have different types
+//! record, `Some(x)` is the option value `some(x)` and `None` is `none` (an
+//! option of the type of the other elements in a sequence that has present
+//! values), a sequence whose elements have different types
 //! is an array of a union type, and an enum variant is represented as serde
 //! represents it in self-describing formats like JSON (a unit variant is its
 //! name and any other variant is a record with a single field named for the
@@ -95,6 +97,7 @@ pub(crate) fn unify(vals: Vec<Value>) -> (Type, Vec<Value>) {
     if vals.is_empty() {
         return (Type::NONE, vals);
     }
+    let vals = type_nones(vals);
     let types: Vec<Type> = vals.iter().map(Value::typ).collect();
     let mut uniq = flatten(types.iter().cloned());
     if uniq.len() == 1 {
@@ -131,6 +134,29 @@ pub(crate) fn unify(vals: Vec<Value>) -> (Type, Vec<Value>) {
     (union, vals)
 }
 
+/// Returns `vals` with each `none` (a serialized `None`) as the none value
+/// of the option type of the other values if they have a single one.
+fn type_nones(vals: Vec<Value>) -> Vec<Value> {
+    let mut ty: Option<&Type> = None;
+    for v in &vals {
+        if let Value::Option(t, _) = v {
+            match ty {
+                Some(u) if u != t => return vals,
+                _ => ty = Some(t),
+            }
+        }
+    }
+    let Some(ty) = ty.cloned() else {
+        return vals;
+    };
+    vals.into_iter()
+        .map(|v| match v {
+            Value::None => Value::Option(ty.clone(), None),
+            v => v,
+        })
+        .collect()
+}
+
 fn is_empty_container(t: &Type) -> bool {
     match t {
         Type::Array(e) | Type::Set(e) => **e == Type::NONE,
@@ -149,9 +175,17 @@ fn same_container(a: &Type, b: &Type) -> bool {
 }
 
 fn retype_empty(v: Value, t: &Type) -> Value {
+    // A container of only nones has the same type as an empty one.
+    let retype = |vals: Vec<Value>, e: &Type| match e {
+        Type::Option(inner) => vals
+            .into_iter()
+            .map(|_| Value::Option((**inner).clone(), None))
+            .collect(),
+        _ => vals,
+    };
     match (v, t) {
-        (Value::Array(_, vals), Type::Array(e)) => Value::Array((**e).clone(), vals),
-        (Value::Set(_, vals), Type::Set(e)) => Value::Set((**e).clone(), vals),
+        (Value::Array(_, vals), Type::Array(e)) => Value::Array((**e).clone(), retype(vals, e)),
+        (Value::Set(_, vals), Type::Set(e)) => Value::Set((**e).clone(), retype(vals, e)),
         (Value::Map(_, _, vals), Type::Map(kv)) => Value::Map(kv.0.clone(), kv.1.clone(), vals),
         (v, _) => v,
     }
@@ -248,10 +282,16 @@ impl ser::Serializer for Serializer {
         Ok(Value::Bytes(v.to_vec()))
     }
     fn serialize_none(self) -> Result<Value, Error> {
-        Ok(Value::Null)
+        // The type of the absent value isn't known here: it's set from the
+        // other elements of a container (see unify) or the static type.
+        Ok(Value::None)
     }
     fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Result<Value, Error> {
-        value.serialize(self)
+        Ok(match value.serialize(self)? {
+            // There's no option of an option.
+            v @ (Value::None | Value::Option(..)) => v,
+            v => Value::Option(v.typ(), Some(Box::new(v))),
+        })
     }
     fn serialize_unit(self) -> Result<Value, Error> {
         Ok(Value::Null)

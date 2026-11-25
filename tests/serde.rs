@@ -83,11 +83,11 @@ fn static_types() {
     );
     assert_eq!(
         format!("{:?}", type_of::<Thing>().unwrap()),
-        "Thing={name:string,color:Color=enum(Red,Green,Blue),shapes:[Shape=(Shape_Circle=float64)|(Shape_Empty=null)|(Shape_Rect={w:float64,h:float64})],at:(Point={x:int64,y:int64})|null,tags:map{string:uint32},when:timestamp,small:uint8}"
+        "Thing={name:string,color:Color=enum(Red,Green,Blue),shapes:[Shape=(Shape_Circle=float64)|(Shape_Empty=null)|(Shape_Rect={w:float64,h:float64})],at?:Point={x:int64,y:int64},tags:map{string:uint32},when:timestamp,small:uint8}"
     );
     assert_eq!(
         format!("{:?}", type_of::<Tree>().unwrap()),
-        "Tree={label:string,kids:[Tree],next:Tree|null}"
+        "Tree={label:string,kids:[Tree],next?:Tree}"
     );
     assert_eq!(
         format!("{:?}", type_of::<Expr>().unwrap()),
@@ -95,7 +95,7 @@ fn static_types() {
     );
     assert_eq!(
         format!("{:?}", type_of::<Option<Vec<(i32, String)>>>().unwrap()),
-        "null|[{column1:int32,column2:string}]"
+        "option([{column1:int32,column2:string}])"
     );
 }
 
@@ -106,7 +106,7 @@ fn typed_roundtrip() {
     assert_eq!(v.typ(), type_of::<Thing>().unwrap());
     assert_eq!(
         v.to_string(),
-        r#"{name:"widget",color:"Green"::Color,shapes:[1.5::Shape_Circle::Shape,{w:2.,h:3.}::Shape_Rect::Shape,null::Shape_Empty::Shape],at:{x:1,y:2}::Point::(Point|null),tags:map{"a":1::uint32,"b":2::uint32},when:2023-11-14T22:13:20Z,small:7::uint8}::Thing"#
+        r#"{name:"widget",color:"Green"::Color,shapes:[1.5::Shape_Circle::Shape,{w:2.,h:3.}::Shape_Rect::Shape,null::Shape_Empty::Shape],at?:{x:1,y:2}::Point,tags:map{"a":1::uint32,"b":2::uint32},when:2023-11-14T22:13:20Z,small:7::uint8}::Thing"#
     );
     assert_eq!(from_value::<Thing>(&v).unwrap(), t);
     // Values of the same Rust type have the same type.
@@ -148,7 +148,7 @@ fn untyped_roundtrip() {
     let v = to_value_untyped(&t).unwrap();
     assert_eq!(
         v.to_string(),
-        r#"{name:"widget",color:"Green",shapes:[{Circle:1.5},{Rect:{w:2.,h:3.}},"Empty"],at:{x:1,y:2},tags:map{"a":1::uint32,"b":2::uint32},when:2023-11-14T22:13:20Z,small:7::uint8}"#
+        r#"{name:"widget",color:"Green",shapes:[{Circle:1.5},{Rect:{w:2.,h:3.}},"Empty"],at?:{x:1,y:2},tags:map{"a":1::uint32,"b":2::uint32},when:2023-11-14T22:13:20Z,small:7::uint8}"#
     );
     assert_eq!(from_value::<Thing>(&v).unwrap(), t);
 }
@@ -188,8 +188,8 @@ fn std_types() {
     assert_eq!(from_value::<(i32, String)>(&v).unwrap(), pair);
     let opts = vec![Some(1i64), None];
     let v = to_value(&opts).unwrap();
-    assert_eq!(v.to_string(), "[1,null]");
-    assert_eq!(format!("{:?}", v.typ()), "[int64|null]");
+    assert_eq!(v.to_string(), "[some(1),none::int64]");
+    assert_eq!(format!("{:?}", v.typ()), "[option(int64)]");
     assert_eq!(from_value::<Vec<Option<i64>>>(&v).unwrap(), opts);
 }
 
@@ -208,6 +208,129 @@ fn shapes_from_other_sources() {
     ]);
     assert_eq!(from_value::<Point>(&v).unwrap(), Point { x: 1, y: 2 });
     assert!(from_value::<Point>(&Value::record([("x", Value::Int64(1))])).is_err());
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+struct Opts {
+    a: Option<i64>,
+    b: Option<Point>,
+    c: Option<Option<String>>,
+    d: Option<()>,
+    e: Vec<Option<u8>>,
+}
+
+#[test]
+fn options() {
+    // An Option is an option type, so an Option field is an optional field.
+    assert_eq!(
+        format!("{:?}", type_of::<Opts>().unwrap()),
+        "Opts={a?:int64,b?:Point={x:int64,y:int64},c?:string,d?:null,e:[option(uint8)]}"
+    );
+    let some = Opts {
+        a: Some(1),
+        b: Some(Point { x: 1, y: 2 }),
+        c: Some(Some("s".into())),
+        d: Some(()),
+        e: vec![None, Some(2)],
+    };
+    let none = Opts {
+        a: None,
+        b: None,
+        c: None,
+        d: None,
+        e: vec![None],
+    };
+    let v = to_value(&some).unwrap();
+    assert_eq!(
+        v.to_string(),
+        r#"{a?:1,b?:{x:1,y:2}::Point,c?:"s",d?:null,e:[none::uint8,some(2::uint8)]}::Opts"#
+    );
+    assert_eq!(v.typ(), type_of::<Opts>().unwrap());
+    assert_eq!(from_value::<Opts>(&v).unwrap(), some);
+    let v = to_value(&none).unwrap();
+    assert_eq!(
+        v.to_string(),
+        "{a?:none::int64,b?:none::Point,c?:none::string,d?:none::null,e:[none::uint8]}::Opts"
+    );
+    assert_eq!(v.typ(), type_of::<Opts>().unwrap());
+    assert_eq!(from_value::<Opts>(&v).unwrap(), none);
+    // There's no option of an option, so Some(None) is none.
+    let flat = Opts {
+        c: Some(None),
+        ..some.clone()
+    };
+    let back = from_value::<Opts>(&to_value(&flat).unwrap()).unwrap();
+    assert_eq!(
+        back,
+        Opts {
+            c: None,
+            ..some.clone()
+        }
+    );
+    // Options survive BSUP.
+    let all = vec![some.clone(), none.clone()];
+    let bytes = superdb::to_vec(&all).unwrap();
+    assert_eq!(superdb::from_slice::<Opts>(&bytes).unwrap(), all);
+    // Without static types, a None has the option type of its neighbors.
+    let v = to_value_untyped(&some).unwrap();
+    assert_eq!(
+        v.to_string(),
+        r#"{a?:1,b?:{x:1,y:2},c?:"s",d?:null,e:[none::uint8,some(2::uint8)]}"#
+    );
+    assert_eq!(from_value::<Opts>(&v).unwrap(), some);
+    let v = to_value_untyped(&none).unwrap();
+    assert_eq!(v.to_string(), "{a:none,b:none,c:none,d:none,e:[none]}");
+    assert_eq!(from_value::<Opts>(&v).unwrap(), none);
+}
+
+#[test]
+fn options_from_other_sources() {
+    use superdb::Type;
+    // Nullable values (e.g., from a SQL table or written when an Option
+    // was T|null), absent fields, and missing fields are None.
+    let nullable = Type::union([Type::INT64, Type::NULL]).unwrap();
+    let null = |v: Value| Value::Union(nullable.clone(), Box::new(v));
+    let rec = |a: Value| {
+        Value::record([
+            ("a", a),
+            ("b", Value::Missing),
+            ("d", Value::Null),
+            ("e", Value::Array(Type::NONE, vec![])),
+        ])
+    };
+    let want = |a| Opts {
+        a,
+        b: None,
+        c: None,
+        d: None,
+        e: vec![],
+    };
+    assert_eq!(
+        from_value::<Opts>(&rec(null(Value::Int64(5)))).unwrap(),
+        want(Some(5))
+    );
+    assert_eq!(
+        from_value::<Opts>(&rec(null(Value::Null))).unwrap(),
+        want(None)
+    );
+    assert_eq!(
+        from_value::<Opts>(&rec(Value::Int64(5))).unwrap(),
+        want(Some(5))
+    );
+    assert_eq!(from_value::<Opts>(&rec(Value::None)).unwrap(), want(None));
+    let some = Value::Option(Type::INT64, Some(Box::new(Value::Int64(5))));
+    assert_eq!(
+        from_value::<Opts>(&rec(some.clone())).unwrap(),
+        want(Some(5))
+    );
+    assert_eq!(
+        from_value::<Opts>(&rec(Value::Option(Type::INT64, None))).unwrap(),
+        want(None)
+    );
+    // An option value is read into a type that isn't an Option if it's
+    // present.
+    assert_eq!(from_value::<i64>(&some).unwrap(), 5);
+    assert!(from_value::<i64>(&Value::Option(Type::INT64, None)).is_err());
 }
 
 /// Writes superdb-serde.bsup in the temporary directory for checking with
@@ -293,7 +416,7 @@ struct Two {
 fn serde_attributes() {
     assert_eq!(
         format!("{:?}", type_of::<Attrs>().unwrap()),
-        "Renamed={maybe:uint16|null,kind:Kind=enum(big,small),pair:Pair={column1:int8,column2:string},meters:Meters=float64,unit:Unit=null}"
+        "Renamed={maybe?:uint16,kind:Kind=enum(big,small),pair:Pair={column1:int8,column2:string},meters:Meters=float64,unit:Unit=null}"
     );
     let a = Attrs {
         maybe: None,
@@ -304,6 +427,8 @@ fn serde_attributes() {
     };
     let v = to_value(&a).unwrap();
     assert_eq!(v.typ(), type_of::<Attrs>().unwrap());
+    // The skipped field is none.
+    assert!(v.to_string().starts_with("{maybe?:none::uint16,"));
     assert_eq!(from_value::<Attrs>(&v).unwrap(), a);
 }
 
