@@ -14,13 +14,16 @@ fn mismatch(v: &Value, t: &Type) -> Error {
     Error::msg(format!("can't convert value {v} to type {t:?}"))
 }
 
-/// Returns true if a value of type `t` may be null.
-fn nullable(t: &Type) -> bool {
-    match t {
-        Type::Primitive(Primitive::Null) => true,
-        Type::Union(types) => types.contains(&Type::NULL),
-        Type::Fusion(inner) => **inner == Type::ALL,
-        _ => false,
+/// Returns the value of a field of type `t` that was skipped when its
+/// record was serialized (e.g., with `skip_serializing_if`): none for an
+/// option and null for a type that includes null.
+fn absent(t: &Type) -> Option<Value> {
+    match t.under() {
+        Type::Option(_) => Some(Value::None),
+        Type::Primitive(Primitive::Null) => Some(Value::Null),
+        Type::Union(types) if types.contains(&Type::NULL) => Some(Value::Null),
+        Type::Fusion(inner) if **inner == Type::ALL => Some(Value::Null),
+        _ => None,
     }
 }
 
@@ -52,7 +55,21 @@ fn tag(v: &Value) -> Option<&str> {
 /// Converts `v` to a value of type `t`, where `enum_name` is the name of the
 /// enum whose variants `t` may be (whose named types are "Enum_Variant").
 fn coerce_in(v: Value, t: &Type, enum_name: Option<&str>) -> Result<Value> {
-    let v = strip_union(v);
+    let v = match (strip_union(v), t) {
+        // A present option where the static type isn't an option (e.g.,
+        // inside an `Option<Option<T>>`, which is `option(T)`).
+        (
+            Value::Option(_, Some(inner)),
+            Type::Primitive(_)
+            | Type::Record(_)
+            | Type::Array(_)
+            | Type::Set(_)
+            | Type::Map(_)
+            | Type::Enum(_)
+            | Type::Error(_),
+        ) => *inner,
+        (v, _) => v,
+    };
     match t {
         Type::Primitive(_) => {
             if v.typ() == *t {
@@ -117,15 +134,9 @@ fn coerce_in(v: Value, t: &Type, enum_name: Option<&str>) -> Result<Value> {
             for f in fields.iter() {
                 let val = match vals.iter().position(|(n, _)| *n == f.name) {
                     Some(k) => vals.remove(k).1,
-                    // A field skipped when it's absent (e.g., with
-                    // skip_serializing_if) is null.
-                    None if nullable(&f.ty) => Value::Null,
-                    None => {
-                        return Err(Error::msg(format!(
-                            "missing field {:?} of type {:?}",
-                            f.name, t
-                        )))
-                    }
+                    None => absent(&f.ty).ok_or_else(|| {
+                        Error::msg(format!("missing field {:?} of type {:?}", f.name, t))
+                    })?,
                 };
                 out.push((f.name.clone(), coerce(val, &f.ty)?));
             }
@@ -170,13 +181,18 @@ fn coerce_in(v: Value, t: &Type, enum_name: Option<&str>) -> Result<Value> {
             },
             _ => Err(mismatch(&v, t)),
         },
-        Type::Option(inner) => match v {
-            Value::Null => Ok(Value::Option((**inner).clone(), None)),
-            v => Ok(Value::Option(
-                (**inner).clone(),
-                Some(Box::new(coerce(v, inner)?)),
-            )),
-        },
+        Type::Option(inner) => {
+            let some = |v: Value| Value::Option((**inner).clone(), Some(Box::new(v)));
+            let none = || Value::Option((**inner).clone(), None);
+            match v {
+                Value::None | Value::Option(_, None) => Ok(none()),
+                Value::Option(_, Some(v)) => Ok(some(coerce(*v, inner)?)),
+                // A null where the option's type has no null is an absent
+                // value from a Serialize impl that writes a unit for None.
+                Value::Null => Ok(coerce(Value::Null, inner).map_or_else(|_| none(), some)),
+                v => Ok(some(coerce(v, inner)?)),
+            }
+        }
         Type::Error(inner) => match v {
             Value::Error(x) => Ok(Value::Error(Box::new(coerce(*x, inner)?))),
             v => Err(mismatch(&v, t)),
@@ -192,14 +208,14 @@ mod tests {
 
     #[test]
     fn options_and_variants() {
-        let opt = Type::union([Type::INT64, Type::NULL]).unwrap();
+        let opt = Type::option(Type::INT64).unwrap();
         let rec = Type::record(vec![
             Field::new("a", opt.clone()),
             Field::new("b", Type::STRING),
         ])
         .unwrap();
         let v = coerce(Value::record([("b", Value::String("x".into()))]), &rec).unwrap();
-        assert_eq!(v.to_string(), r#"{a:null::(int64|null),b:"x"}"#);
+        assert_eq!(v.to_string(), r#"{a?:none::int64,b:"x"}"#);
         assert_eq!(v.typ(), rec);
         let circle = Type::named("Shape_Circle", Type::FLOAT64).unwrap();
         let empty = Type::named("Shape_Empty", Type::NULL).unwrap();

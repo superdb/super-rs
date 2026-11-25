@@ -15,7 +15,7 @@
 //! | `char`, `String`, `&str`     | `string`                                  |
 //! | bytes (e.g., `serde_bytes`)  | `bytes`                                   |
 //! | `()`                         | `null`                                    |
-//! | `Option<T>`                  | `T\|null`                                 |
+//! | `Option<T>`                  | `option(T)` (a field `f: Option<T>` is the optional field `f?:T`) |
 //! | `Vec<T>` and other sequences | `[T]`                                     |
 //! | maps                         | `map{K:V}`                                |
 //! | tuples                       | `{column1:A,column2:B,...}`               |
@@ -28,6 +28,12 @@
 //! | `std::net::IpAddr`           | `ip`                                      |
 //! | [`Timestamp`], [`Duration`]  | `timestamp`, `duration`                   |
 //! | anything traced by `deserialize_any` | `fusion(all)` (any type)          |
+//!
+//! `None` is the option's `none` value and `Some(x)` is its `some(x)` value.
+//! The super data model has no option of an option, so `Option<Option<T>>`
+//! is also `option(T)`: `Some(None)` is written as `none` and reads back as
+//! `None`.  (Use an enum to tell the two apart.)  An `Option` of a type
+//! traced as any type is that type, where `None` is `none`.
 //!
 //! [`Timestamp`]: crate::Timestamp
 //! [`Duration`]: crate::Duration
@@ -831,10 +837,12 @@ impl Builder<'_> {
             Format::Prim(t) => t.clone(),
             Format::Option(inner) => {
                 let t = self.format(inner)?;
-                if t == Type::fusion(Type::ALL) || t == Type::NULL {
+                // There's no option of an option, so nested options
+                // collapse, and any type already includes none.
+                if t == Type::fusion(Type::ALL) || matches!(t, Type::Option(_)) {
                     t
                 } else {
-                    Type::union([t, Type::NULL])?
+                    Type::option(t)?
                 }
             }
             Format::Seq(inner) => Type::array(self.format(inner)?),

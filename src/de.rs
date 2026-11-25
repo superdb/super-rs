@@ -3,10 +3,11 @@
 //! The deserializer accepts the values written by this crate's serializer
 //! (with static types or inferred types) and, more generally, any value of a
 //! compatible shape: a struct from a record (whose absent and missing fields
-//! are left to serde's defaults), an `Option` from a nullable value, an enum
-//! from a value of a named type `Enum_Variant`, an enum value, a string
-//! naming a unit variant, or a record with a single field naming the
-//! variant, and so on.  Values of union, named, option, and fusion types are
+//! are left to serde's defaults), an `Option` from an option value or a
+//! value that may be null (so `T|null` values, as SQL tables have, are read
+//! too), an enum from a value of a named type `Enum_Variant`, an enum value,
+//! a string naming a unit variant, or a record with a single field naming
+//! the variant, and so on.  Values of union, named, option, and fusion types are
 //! deserialized from the values inside them.
 
 use serde::de::{self, value::BorrowedStrDeserializer, DeserializeSeed, Visitor};
@@ -169,12 +170,18 @@ impl<'de> de::Deserializer<'de> for Deserializer<'de> {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        if is_absent(self.v) {
-            visitor.visit_none()
-        } else {
-            visitor.visit_some(Deserializer {
-                v: peel(self.v, false),
-            })
+        let mut v = self.v;
+        while let Value::Union(_, inner) | Value::Fusion(_, inner, _) = v {
+            v = inner;
+        }
+        match v {
+            // An option value says whether it's present, so a present null
+            // (e.g., `Some(())`) is distinct from none.
+            Value::Option(_, Some(inner)) => visitor.visit_some(Deserializer { v: inner }),
+            // Otherwise, null, none, and missing are None, so values of
+            // type T|null are read too.
+            v if is_absent(v) => visitor.visit_none(),
+            v => visitor.visit_some(Deserializer { v: peel(v, false) }),
         }
     }
 

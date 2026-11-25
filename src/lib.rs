@@ -20,6 +20,8 @@
 //! an enum's variants become named types (`Shape_Circle`, `Shape_Rect`, ...)
 //! so a value retains its Rust type and deserializes back to it, and SuperDB
 //! queries can tell the variants apart (e.g., `where is(<Shape_Circle>)`).
+//! An `Option<T>` is the option type `option(T)`, so an `Option` field of a
+//! struct is an optional field of its record (`{name?:T}`).
 //!
 //! ```
 //! use serde::{Deserialize, Serialize};
@@ -91,8 +93,9 @@ pub fn to_value<T: Serialize + DeserializeOwned>(value: &T) -> Result<Value> {
 }
 
 /// Converts a Rust value to a super-structured value whose type is inferred
-/// from the value (see [`ser`]): structs are anonymous records, `None` is
-/// null, and enum variants are represented as they are in JSON.
+/// from the value (see [`ser`]): structs are anonymous records, `Some(x)` is
+/// the option value `some(x)`, `None` is `none`, and enum variants are
+/// represented as they are in JSON.
 pub fn to_value_untyped<T: Serialize + ?Sized>(value: &T) -> Result<Value> {
     value.serialize(ser::Serializer)
 }

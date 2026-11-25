@@ -40,11 +40,14 @@ type Shape_Empty=null
 type Shape_Rect={w:float64,h:float64}
 type Shape=Shape_Circle|Shape_Empty|Shape_Rect
 type Point={x:int64,y:int64}
-type Thing={name:string,color:Color,shapes:[Shape],at:Point|null}
+type Thing={name:string,color:Color,shapes:[Shape],at?:Point}
 ```
 
 so the values read back into the same Rust types, and SuperDB can tell them
-apart (e.g., `unnest shapes | where is(this, <Shape_Rect>)`).  See the
+apart (e.g., `unnest shapes | where is(this, <Shape_Rect>)`).  An `Option<T>`
+is the option type `option(T)`, so the `Option` field `at` is the optional
+field `at?:Point` whose value is `none` when it's `None`.  (Reading into an
+`Option<T>` also accepts a `T|null` value or an absent field.)  See the
 `schema` module for the full mapping.  Types that can't be traced (e.g.,
 untagged enums, which deserialize with `deserialize_any`) fall back to types
 inferred from each value.
